@@ -1,0 +1,638 @@
+{
+  "cells": [
+    {
+      "cell_type": "markdown",
+      "source": [
+        "Copyright (c) Microsoft Corporation. All rights reserved.\n",
+        "\n",
+        "Licensed under the MIT License."
+      ],
+      "metadata": {}
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "![Impressions](https://PixelServer20190423114238.azurewebsites.net/api/impressions/MachineLearningNotebooks/how-to-use-azureml/work-with-data/datadrift-tutorial/datadrift-quickdemo.png)"
+      ],
+      "metadata": {}
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "# Analyze data drift in Azure Machine Learning datasets \n",
+        "\n",
+        "In this tutorial, you will setup a data drift monitor on a weather dataset to:\n",
+        "\n",
+        "&#x2611; Analyze historical data for drift\n",
+        "\n",
+        "&#x2611; Setup a monitor to recieve email alerts if data drift is detected going forward\n",
+        "\n",
+        "If your workspace is Enterprise level, view and exlpore the results in the Azure Machine Learning studio. The video below shows the results from this tutorial. \n",
+        "\n",
+        "![gif](media/video.gif)"
+      ],
+      "metadata": {}
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "## Prerequisites\n",
+        "If you are using an Azure Machine Learning Compute instance, you are all set. Otherwise, go through the [configuration notebook](../../../configuration.ipynb) if you haven't already established your connection to the AzureML Workspace."
+      ],
+      "metadata": {}
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# Check core SDK version number\n",
+        "import azureml.core\n",
+        "\n",
+        "print('SDK version:', azureml.core.VERSION)"
+      ],
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": "SDK version: 1.36.0\n"
+        }
+      ],
+      "execution_count": 1,
+      "metadata": {
+        "gather": {
+          "logged": 1641335870808
+        }
+      }
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "## Initialize Workspace\n",
+        "\n",
+        "Initialize a workspace object from persisted configuration."
+      ],
+      "metadata": {}
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "from azureml.core import Workspace\n",
+        "\n",
+        "ws = Workspace.from_config()\n",
+        "ws"
+      ],
+      "outputs": [
+        {
+          "output_type": "execute_result",
+          "execution_count": 2,
+          "data": {
+            "text/plain": "Workspace.create(name='mlwspc2022', subscription_id='03588139-a541-41f5-a712-e635916119b9', resource_group='mlwspc2022')"
+          },
+          "metadata": {}
+        }
+      ],
+      "execution_count": 2,
+      "metadata": {
+        "gather": {
+          "logged": 1641335875948
+        }
+      }
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "## Setup target and baseline datasets\n",
+        "\n",
+        "Setup the baseline and target datasets. The baseline will be used to compare each time slice of the target dataset, which is sampled by a given frequency. For further details, see [our documentation](http://aka.ms/datadrift). \n",
+        "\n",
+        "The next few cells will:\n",
+        "  * get the default datastore\n",
+        "  * upload the `weather-data` to the datastore\n",
+        "  * create the Tabular dataset from the data\n",
+        "  * add the timeseries trait by specifying the timestamp column `datetime`\n",
+        "  * register the dataset\n",
+        "  * create the baseline as a time slice of the target dataset\n",
+        "  * optionally, register the baseline dataset\n",
+        "  \n",
+        "The folder `weather-data` contains weather data from the [NOAA Integrated Surface Data](https://azure.microsoft.com/services/open-datasets/catalog/noaa-integrated-surface-data/) filtered down to to station names containing the string 'FLORIDA' to reduce the size of data. See `get_data.py` to see how this data is curated and modify as desired. This script may take a long time to run, hence the data is provided in the `weather-data` folder for this demo."
+      ],
+      "metadata": {}
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# use default datastore\n",
+        "dstore = ws.get_default_datastore()"
+      ],
+      "outputs": [],
+      "execution_count": 3,
+      "metadata": {
+        "gather": {
+          "logged": 1641335880055
+        }
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# upload weather data\n",
+        "dstore.upload('weather-data', 'datadrift-data', overwrite=True, show_progress=True)"
+      ],
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": "\"Datastore.upload\" is deprecated after version 1.0.69. Please use \"Dataset.File.upload_directory\" to upload your files             from a local directory and create FileDataset in single method call. See Dataset API change notice at https://aka.ms/dataset-deprecation.\n"
+        },
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": "Uploading an estimated of 118 files\nUploading weather-data/2010/01/data.parquet\nUploaded weather-data/2010/01/data.parquet, 1 files out of an estimated total of 118\nUploading weather-data/2010/02/data.parquet\nUploaded weather-data/2010/02/data.parquet, 2 files out of an estimated total of 118\nUploading weather-data/2010/03/data.parquet\nUploaded weather-data/2010/03/data.parquet, 3 files out of an estimated total of 118\nUploading weather-data/2010/04/data.parquet\nUploaded weather-data/2010/04/data.parquet, 4 files out of an estimated total of 118\nUploading weather-data/2010/05/data.parquet\nUploaded weather-data/2010/05/data.parquet, 5 files out of an estimated total of 118\nUploading weather-data/2010/06/data.parquet\nUploaded weather-data/2010/06/data.parquet, 6 files out of an estimated total of 118\nUploading weather-data/2010/07/data.parquet\nUploaded weather-data/2010/07/data.parquet, 7 files out of an estimated total of 118\nUploading weather-data/2010/09/data.parquet\nUploaded weather-data/2010/09/data.parquet, 8 files out of an estimated total of 118\nUploading weather-data/2010/10/data.parquet\nUploaded weather-data/2010/10/data.parquet, 9 files out of an estimated total of 118\nUploading weather-data/2010/08/data.parquet\nUploaded weather-data/2010/08/data.parquet, 10 files out of an estimated total of 118\nUploading weather-data/2010/11/data.parquet\nUploaded weather-data/2010/11/data.parquet, 11 files out of an estimated total of 118\nUploading weather-data/2011/01/data.parquet\nUploaded weather-data/2011/01/data.parquet, 12 files out of an estimated total of 118\nUploading weather-data/2011/02/data.parquet\nUploaded weather-data/2011/02/data.parquet, 13 files out of an estimated total of 118\nUploading weather-data/2011/03/data.parquet\nUploaded weather-data/2011/03/data.parquet, 14 files out of an estimated total of 118\nUploading weather-data/2011/04/data.parquet\nUploaded weather-data/2011/04/data.parquet, 15 files out of an estimated total of 118\nUploading weather-data/2011/05/data.parquet\nUploaded weather-data/2011/05/data.parquet, 16 files out of an estimated total of 118\nUploading weather-data/2011/06/data.parquet\nUploaded weather-data/2011/06/data.parquet, 17 files out of an estimated total of 118\nUploading weather-data/2011/07/data.parquet\nUploaded weather-data/2011/07/data.parquet, 18 files out of an estimated total of 118\nUploading weather-data/2011/08/data.parquet\nUploaded weather-data/2011/08/data.parquet, 19 files out of an estimated total of 118\nUploading weather-data/2011/09/data.parquet\nUploaded weather-data/2011/09/data.parquet, 20 files out of an estimated total of 118\nUploading weather-data/2011/10/data.parquet\nUploaded weather-data/2011/10/data.parquet, 21 files out of an estimated total of 118\nUploading weather-data/2011/11/data.parquet\nUploaded weather-data/2011/11/data.parquet, 22 files out of an estimated total of 118\nUploading weather-data/2011/12/data.parquet\nUploaded weather-data/2011/12/data.parquet, 23 files out of an estimated total of 118\nUploading weather-data/2012/02/data.parquet\nUploaded weather-data/2012/02/data.parquet, 24 files out of an estimated total of 118\nUploading weather-data/2012/04/data.parquet\nUploaded weather-data/2012/04/data.parquet, 25 files out of an estimated total of 118\nUploading weather-data/2012/05/data.parquet\nUploaded weather-data/2012/05/data.parquet, 26 files out of an estimated total of 118\nUploading weather-data/2012/06/data.parquet\nUploaded weather-data/2012/06/data.parquet, 27 files out of an estimated total of 118\nUploading weather-data/2010/12/data.parquet\nUploaded weather-data/2010/12/data.parquet, 28 files out of an estimated total of 118\nUploading weather-data/2012/01/data.parquet\nUploaded weather-data/2012/01/data.parquet, 29 files out of an estimated total of 118\nUploading weather-data/2012/03/data.parquet\nUploaded weather-data/2012/03/data.parquet, 30 files out of an estimated total of 118\nUploading weather-data/2012/07/data.parquet\nUploaded weather-data/2012/07/data.parquet, 31 files out of an estimated total of 118\nUploading weather-data/2012/08/data.parquet\nUploaded weather-data/2012/08/data.parquet, 32 files out of an estimated total of 118\nUploading weather-data/2012/09/data.parquet\nUploaded weather-data/2012/09/data.parquet, 33 files out of an estimated total of 118\nUploading weather-data/2012/10/data.parquet\nUploaded weather-data/2012/10/data.parquet, 34 files out of an estimated total of 118\nUploading weather-data/2012/11/data.parquet\nUploaded weather-data/2012/11/data.parquet, 35 files out of an estimated total of 118\nUploading weather-data/2012/12/data.parquet\nUploaded weather-data/2012/12/data.parquet, 36 files out of an estimated total of 118\nUploading weather-data/2013/01/data.parquet\nUploaded weather-data/2013/01/data.parquet, 37 files out of an estimated total of 118\nUploading weather-data/2013/02/data.parquet\nUploaded weather-data/2013/02/data.parquet, 38 files out of an estimated total of 118\nUploading weather-data/2013/03/data.parquet\nUploaded weather-data/2013/03/data.parquet, 39 files out of an estimated total of 118\nUploading weather-data/2013/04/data.parquet\nUploaded weather-data/2013/04/data.parquet, 40 files out of an estimated total of 118\nUploading weather-data/2013/05/data.parquet\nUploaded weather-data/2013/05/data.parquet, 41 files out of an estimated total of 118\nUploading weather-data/2013/06/data.parquet\nUploaded weather-data/2013/06/data.parquet, 42 files out of an estimated total of 118\nUploading weather-data/2013/07/data.parquet\nUploaded weather-data/2013/07/data.parquet, 43 files out of an estimated total of 118\nUploading weather-data/2013/08/data.parquet\nUploaded weather-data/2013/08/data.parquet, 44 files out of an estimated total of 118\nUploading weather-data/2013/09/data.parquet\nUploaded weather-data/2013/09/data.parquet, 45 files out of an estimated total of 118\nUploading weather-data/2013/10/data.parquet\nUploaded weather-data/2013/10/data.parquet, 46 files out of an estimated total of 118\nUploading weather-data/2013/12/data.parquet\nUploaded weather-data/2013/12/data.parquet, 47 files out of an estimated total of 118\nUploading weather-data/2014/01/data.parquet\nUploaded weather-data/2014/01/data.parquet, 48 files out of an estimated total of 118\nUploading weather-data/2014/03/data.parquet\nUploaded weather-data/2014/03/data.parquet, 49 files out of an estimated total of 118\nUploading weather-data/2014/07/data.parquet\nUploaded weather-data/2014/07/data.parquet, 50 files out of an estimated total of 118\nUploading weather-data/2013/11/data.parquet\nUploaded weather-data/2013/11/data.parquet, 51 files out of an estimated total of 118\nUploading weather-data/2014/02/data.parquet\nUploaded weather-data/2014/02/data.parquet, 52 files out of an estimated total of 118\nUploading weather-data/2014/04/data.parquet\nUploaded weather-data/2014/04/data.parquet, 53 files out of an estimated total of 118\nUploading weather-data/2014/05/data.parquet\nUploaded weather-data/2014/05/data.parquet, 54 files out of an estimated total of 118\nUploading weather-data/2014/06/data.parquet\nUploaded weather-data/2014/06/data.parquet, 55 files out of an estimated total of 118\nUploading weather-data/2014/08/data.parquet\nUploaded weather-data/2014/08/data.parquet, 56 files out of an estimated total of 118\nUploading weather-data/2014/09/data.parquet\nUploaded weather-data/2014/09/data.parquet, 57 files out of an estimated total of 118\nUploading weather-data/2014/10/data.parquet\nUploaded weather-data/2014/10/data.parquet, 58 files out of an estimated total of 118\nUploading weather-data/2014/11/data.parquet\nUploaded weather-data/2014/11/data.parquet, 59 files out of an estimated total of 118\nUploading weather-data/2014/12/data.parquet\nUploaded weather-data/2014/12/data.parquet, 60 files out of an estimated total of 118\nUploading weather-data/2015/01/data.parquet\nUploaded weather-data/2015/01/data.parquet, 61 files out of an estimated total of 118\nUploading weather-data/2015/02/data.parquet\nUploaded weather-data/2015/02/data.parquet, 62 files out of an estimated total of 118\nUploading weather-data/2015/03/data.parquet\nUploaded weather-data/2015/03/data.parquet, 63 files out of an estimated total of 118\nUploading weather-data/2015/04/data.parquet\nUploaded weather-data/2015/04/data.parquet, 64 files out of an estimated total of 118\nUploading weather-data/2015/05/data.parquet\nUploaded weather-data/2015/05/data.parquet, 65 files out of an estimated total of 118\nUploading weather-data/2015/06/data.parquet\nUploaded weather-data/2015/06/data.parquet, 66 files out of an estimated total of 118\nUploading weather-data/2015/07/data.parquet\nUploaded weather-data/2015/07/data.parquet, 67 files out of an estimated total of 118\nUploading weather-data/2015/08/data.parquet\nUploaded weather-data/2015/08/data.parquet, 68 files out of an estimated total of 118\nUploading weather-data/2015/09/data.parquet\nUploaded weather-data/2015/09/data.parquet, 69 files out of an estimated total of 118\nUploading weather-data/2015/10/data.parquet\nUploaded weather-data/2015/10/data.parquet, 70 files out of an estimated total of 118\nUploading weather-data/2015/12/data.parquet\nUploaded weather-data/2015/12/data.parquet, 71 files out of an estimated total of 118\nUploading weather-data/2016/01/data.parquet\nUploaded weather-data/2016/01/data.parquet, 72 files out of an estimated total of 118\nUploading weather-data/2016/02/data.parquet\nUploaded weather-data/2016/02/data.parquet, 73 files out of an estimated total of 118\nUploading weather-data/2016/05/data.parquet\nUploaded weather-data/2016/05/data.parquet, 74 files out of an estimated total of 118\nUploading weather-data/2016/07/data.parquet\nUploaded weather-data/2016/07/data.parquet, 75 files out of an estimated total of 118\nUploading weather-data/2015/11/data.parquet\nUploaded weather-data/2015/11/data.parquet, 76 files out of an estimated total of 118\nUploading weather-data/2016/03/data.parquet\nUploaded weather-data/2016/03/data.parquet, 77 files out of an estimated total of 118\nUploading weather-data/2016/04/data.parquet\nUploaded weather-data/2016/04/data.parquet, 78 files out of an estimated total of 118\nUploading weather-data/2016/06/data.parquet\nUploaded weather-data/2016/06/data.parquet, 79 files out of an estimated total of 118\nUploading weather-data/2016/08/data.parquet\nUploaded weather-data/2016/08/data.parquet, 80 files out of an estimated total of 118\nUploading weather-data/2016/09/data.parquet\nUploaded weather-data/2016/09/data.parquet, 81 files out of an estimated total of 118\nUploading weather-data/2016/10/data.parquet\nUploaded weather-data/2016/10/data.parquet, 82 files out of an estimated total of 118\nUploading weather-data/2016/11/data.parquet\nUploaded weather-data/2016/11/data.parquet, 83 files out of an estimated total of 118\nUploading weather-data/2016/12/data.parquet\nUploaded weather-data/2016/12/data.parquet, 84 files out of an estimated total of 118\nUploading weather-data/2017/01/data.parquet\nUploaded weather-data/2017/01/data.parquet, 85 files out of an estimated total of 118\nUploading weather-data/2017/02/data.parquet\nUploaded weather-data/2017/02/data.parquet, 86 files out of an estimated total of 118\nUploading weather-data/2017/03/data.parquet\nUploaded weather-data/2017/03/data.parquet, 87 files out of an estimated total of 118\nUploading weather-data/2017/04/data.parquet\nUploaded weather-data/2017/04/data.parquet, 88 files out of an estimated total of 118\nUploading weather-data/2017/05/data.parquet\nUploaded weather-data/2017/05/data.parquet, 89 files out of an estimated total of 118\nUploading weather-data/2017/06/data.parquet\nUploaded weather-data/2017/06/data.parquet, 90 files out of an estimated total of 118\nUploading weather-data/2017/07/data.parquet\nUploaded weather-data/2017/07/data.parquet, 91 files out of an estimated total of 118\nUploading weather-data/2017/08/data.parquet\nUploaded weather-data/2017/08/data.parquet, 92 files out of an estimated total of 118\nUploading weather-data/2017/09/data.parquet\nUploaded weather-data/2017/09/data.parquet, 93 files out of an estimated total of 118\nUploading weather-data/2017/10/data.parquet\nUploaded weather-data/2017/10/data.parquet, 94 files out of an estimated total of 118\nUploading weather-data/2018/02/data.parquet\nUploaded weather-data/2018/02/data.parquet, 95 files out of an estimated total of 118\nUploading weather-data/2018/03/data.parquet\nUploaded weather-data/2018/03/data.parquet, 96 files out of an estimated total of 118\nUploading weather-data/2018/04/data.parquet\nUploaded weather-data/2018/04/data.parquet, 97 files out of an estimated total of 118\nUploading weather-data/2018/05/data.parquet\nUploaded weather-data/2018/05/data.parquet, 98 files out of an estimated total of 118\nUploading weather-data/2017/11/data.parquet\nUploaded weather-data/2017/11/data.parquet, 99 files out of an estimated total of 118\nUploading weather-data/2017/12/data.parquet\nUploaded weather-data/2017/12/data.parquet, 100 files out of an estimated total of 118\nUploading weather-data/2018/01/data.parquet\nUploaded weather-data/2018/01/data.parquet, 101 files out of an estimated total of 118\nUploading weather-data/2018/06/data.parquet\nUploaded weather-data/2018/06/data.parquet, 102 files out of an estimated total of 118\nUploading weather-data/2018/07/data.parquet\nUploaded weather-data/2018/07/data.parquet, 103 files out of an estimated total of 118\nUploading weather-data/2018/08/data.parquet\nUploaded weather-data/2018/08/data.parquet, 104 files out of an estimated total of 118\nUploading weather-data/2018/09/data.parquet\nUploaded weather-data/2018/09/data.parquet, 105 files out of an estimated total of 118\nUploading weather-data/2018/10/data.parquet\nUploaded weather-data/2018/10/data.parquet, 106 files out of an estimated total of 118\nUploading weather-data/2018/11/data.parquet\nUploaded weather-data/2018/11/data.parquet, 107 files out of an estimated total of 118\nUploading weather-data/2018/12/data.parquet\nUploaded weather-data/2018/12/data.parquet, 108 files out of an estimated total of 118\nUploading weather-data/2019/01/data.parquet\nUploaded weather-data/2019/01/data.parquet, 109 files out of an estimated total of 118\nUploading weather-data/2019/02/data.parquet\nUploaded weather-data/2019/02/data.parquet, 110 files out of an estimated total of 118\nUploading weather-data/2019/03/data.parquet\nUploaded weather-data/2019/03/data.parquet, 111 files out of an estimated total of 118\nUploading weather-data/2019/04/data.parquet\nUploaded weather-data/2019/04/data.parquet, 112 files out of an estimated total of 118\nUploading weather-data/2019/05/data.parquet\nUploaded weather-data/2019/05/data.parquet, 113 files out of an estimated total of 118\nUploading weather-data/2019/06/data.parquet\nUploaded weather-data/2019/06/data.parquet, 114 files out of an estimated total of 118\nUploading weather-data/2019/07/data.parquet\nUploaded weather-data/2019/07/data.parquet, 115 files out of an estimated total of 118\nUploading weather-data/2019/08/data.parquet\nUploaded weather-data/2019/08/data.parquet, 116 files out of an estimated total of 118\nUploading weather-data/2019/09/data.parquet\nUploaded weather-data/2019/09/data.parquet, 117 files out of an estimated total of 118\nUploading weather-data/2019/10/data.parquet\nUploaded weather-data/2019/10/data.parquet, 118 files out of an estimated total of 118\nUploaded 118 files\n"
+        },
+        {
+          "output_type": "execute_result",
+          "execution_count": 4,
+          "data": {
+            "text/plain": "$AZUREML_DATAREFERENCE_33d0e19c0c004b958539ccdfa84b4cd2"
+          },
+          "metadata": {}
+        }
+      ],
+      "execution_count": 4,
+      "metadata": {
+        "gather": {
+          "logged": 1641335886566
+        }
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# import Dataset class\n",
+        "from azureml.core import Dataset\n",
+        "\n",
+        "# create target dataset \n",
+        "target = Dataset.Tabular.from_parquet_files(dstore.path('datadrift-data/**/data.parquet'))\n",
+        "# set the timestamp column\n",
+        "target = target.with_timestamp_columns('datetime')\n",
+        "# register the target dataset\n",
+        "target = target.register(ws, 'target')\n",
+        "# retrieve the dataset from the workspace by name\n",
+        "target = Dataset.get_by_name(ws, 'target')"
+      ],
+      "outputs": [],
+      "execution_count": 5,
+      "metadata": {
+        "gather": {
+          "logged": 1641335960964
+        }
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# import datetime \n",
+        "from datetime import datetime\n",
+        "\n",
+        "# set baseline dataset as January 2019 weather data\n",
+        "baseline = Dataset.Tabular.from_parquet_files(dstore.path('datadrift-data/2019/01/data.parquet'))"
+      ],
+      "outputs": [],
+      "execution_count": 6,
+      "metadata": {
+        "gather": {
+          "logged": 1641335963448
+        }
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# optionally, register the baseline dataset. if skipped, an unregistered dataset will be used\n",
+        "baseline = baseline.register(ws, 'baseline')"
+      ],
+      "outputs": [],
+      "execution_count": 15,
+      "metadata": {
+        "gather": {
+          "logged": 1641398430183
+        }
+      }
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "## Create compute target\n",
+        "\n",
+        "> Note that if you have an AzureML Data Scientist role, you will not have permission to create compute resources. Talk to your workspace or IT admin to create the compute targets described in this section, if they do not already exist.\n",
+        "\n",
+        "Create an Azure Machine Learning compute cluster to run the data drift monitor and associated runs. The below cell will create a compute cluster named `'cpu-cluster'`. "
+      ],
+      "metadata": {}
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "from azureml.core.compute import AmlCompute, ComputeTarget\n",
+        "\n",
+        "compute_name = 'cpu-cluster'\n",
+        "\n",
+        "if compute_name in ws.compute_targets:\n",
+        "    compute_target = ws.compute_targets[compute_name]\n",
+        "    if compute_target and type(compute_target) is AmlCompute:\n",
+        "        print('found compute target. just use it. ' + compute_name)\n",
+        "else:\n",
+        "    print('creating a new compute target...')\n",
+        "    provisioning_config = AmlCompute.provisioning_configuration(vm_size='STANDARD_D3_V2', min_nodes=0, max_nodes=2)\n",
+        "\n",
+        "    # create the cluster\n",
+        "    compute_target = ComputeTarget.create(ws, compute_name, provisioning_config)\n",
+        "\n",
+        "    # can poll for a minimum number of nodes and for a specific timeout.\n",
+        "    # if no min node count is provided it will use the scale settings for the cluster\n",
+        "    compute_target.wait_for_completion(show_output=True, min_node_count=None, timeout_in_minutes=20)\n",
+        "\n",
+        "    # For a more detailed view of current AmlCompute status, use get_status()\n",
+        "    print(compute_target.get_status().serialize())"
+      ],
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": "creating a new compute target...\nInProgress..\nSucceededProvisioning operation finished, operation \"Succeeded\"\nSucceeded\nAmlCompute wait for completion finished\n\nMinimum number of nodes requested have been provisioned\n{'currentNodeCount': 0, 'targetNodeCount': 0, 'nodeStateCounts': {'preparingNodeCount': 0, 'runningNodeCount': 0, 'idleNodeCount': 0, 'unusableNodeCount': 0, 'leavingNodeCount': 0, 'preemptedNodeCount': 0}, 'allocationState': 'Resizing', 'allocationStateTransitionTime': '2022-01-04T22:39:36.985000+00:00', 'errors': None, 'creationTime': '2022-01-04T22:39:36.531165+00:00', 'modifiedTime': '2022-01-04T22:39:42.133551+00:00', 'provisioningState': 'Succeeded', 'provisioningStateTransitionTime': None, 'scaleSettings': {'minNodeCount': 0, 'maxNodeCount': 2, 'nodeIdleTimeBeforeScaleDown': 'PT1800S'}, 'vmPriority': 'Dedicated', 'vmSize': 'STANDARD_D3_V2'}\n"
+        }
+      ],
+      "execution_count": 7,
+      "metadata": {
+        "gather": {
+          "logged": 1641335987349
+        }
+      }
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "## Create data drift monitor\n",
+        "\n",
+        "See [our documentation](http://aka.ms/datadrift) for a complete description for all of the parameters. "
+      ],
+      "metadata": {}
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "from azureml.datadrift import DataDriftDetector, AlertConfiguration\n",
+        "\n",
+        "alert_config = AlertConfiguration(['user@contoso.com']) # replace with your email to recieve alerts from the scheduled pipeline after enabling\n",
+        "\n",
+        "monitor = DataDriftDetector.create_from_datasets(ws, 'weather-monitor', baseline, target, \n",
+        "                                                      compute_target='cpu-cluster',         # compute target for scheduled pipeline and backfills \n",
+        "                                                      frequency='Week',                     # how often to analyze target data\n",
+        "                                                      feature_list=None,                    # list of features to detect drift on\n",
+        "                                                      drift_threshold=None,                 # threshold from 0 to 1 for email alerting\n",
+        "                                                      latency=0,                            # SLA in hours for target data to arrive in the dataset\n",
+        "                                                      alert_config=alert_config)            # email addresses to send alert"
+      ],
+      "outputs": [],
+      "execution_count": 8,
+      "metadata": {
+        "tags": [
+          "datadrift-remarks-sample"
+        ],
+        "gather": {
+          "logged": 1641336008328
+        }
+      }
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "## Update data drift monitor\n",
+        "\n",
+        "Many settings of the data drift monitor can be updated after creation. In this demo, we will update the `drift_threshold` and `feature_list`. See [our documentation](http://aka.ms/datadrift) for details on which settings can be changed."
+      ],
+      "metadata": {}
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# get monitor by name\n",
+        "monitor = DataDriftDetector.get_by_name(ws, 'weather-monitor')\n",
+        "\n",
+        "# create feature list - need to exclude columns that naturally drift or increment over time, such as year, day, index\n",
+        "columns  = list(baseline.take(1).to_pandas_dataframe())\n",
+        "exclude  = ['year', 'day', 'version', '__index_level_0__']\n",
+        "features = [col for col in columns if col not in exclude]\n",
+        "\n",
+        "# update the feature list\n",
+        "monitor  = monitor.update(feature_list=features)"
+      ],
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": "Current state: Disabled\n2022-01-04 22:40:15,835 - azureml.datadrift._logging._telemetry_logger.azureml.datadrift.datadriftdetector - WARNING - Alert has not been setup. Datadriftdetector with id: 8069a537-4a2a-4d3b-aef7-e38c1a3cb6fe.\nThis may be because you do not have access to the AppInsights associated with this AzureML Workspace - activity_id:18511524-e78e-4957-ae99-5d15637c510c activity_name:update activity_type:InternalCall tenant_id:None subscription_id:03588139-a541-41f5-a712-e635916119b9 resource_group:mlwspc2022 workspace_id:6c3daf74-56ad-4ce6-b604-cdc7a8ffaa52 workspace_location:westus2 compute_type:None compute_size:None compute_nodes_min:None compute_nodes_max:None image_id:None dd_id:8069a537-4a2a-4d3b-aef7-e38c1a3cb6fe dd_type:DatasetBased freq:Week interval:1 scheduling:Disabled threshold:None latency:0 total_features:0 services:None train_dataset_id:None baseline_dataset_id:07fb36f3-29ce-4727-a9d1-a01200685087 target_dataset_id:ad3e4ba8-c58d-46c6-936c-428503de7de8 log_env:sdk client telemetry_event_id:4dd09f23-7ba7-4fc3-afcc-2eb4f589b14e new_total_features:19 sdk_version:1.36.0 telemetry_component_name:azureml.datadrift\n"
+        },
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": "/anaconda/envs/azureml_py36/lib/python3.6/site-packages/azureml/datadrift/datadriftdetector.py:1371: UserWarning: Alert has not been setup. Datadriftdetector with id: 8069a537-4a2a-4d3b-aef7-e38c1a3cb6fe.\nThis may be because you do not have access to the AppInsights associated with this AzureML Workspace\n  warnings.warn(error_msg)\n"
+        }
+      ],
+      "execution_count": 9,
+      "metadata": {
+        "gather": {
+          "logged": 1641336015955
+        }
+      }
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "## Analyze historical data and backfill\n",
+        "\n",
+        "You can use the `backfill` method to:\n",
+        "  * analyze historical data\n",
+        "  * backfill metrics after updating the settings (mainly the feature list)\n",
+        "  * backfill metrics for failed runs\n",
+        "  \n",
+        "The below cells will run two backfills that will produce data drift results for 2019 weather data, with January used as the baseline in the monitor. The output can be seen from the `show` method after the runs have completed, or viewed from the Azure Machine Learning studio for Enterprise workspaces.\n",
+        "\n",
+        "![Drift results](media/drift-results.png)"
+      ],
+      "metadata": {}
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        ">**Tip!** When starting with the data drift capability, start by backfilling on a small section of data to get initial results. Update the feature list as needed by removing columns that are causing drift, but can be ignored, and backfill this section of data until satisfied with the results. Then, backfill on a larger slice of data and/or set the alert configuration, threshold, and enable the schedule to recieve alerts to drift on your dataset. All of this can be done through the UI (Enterprise) or Python SDK."
+      ],
+      "metadata": {
+        "jupyter": {
+          "source_hidden": true
+        }
+      }
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "Although it depends on many factors, the below backfill should typically take less than 20 minutes to run. Results will show as soon as they become available, not when the backfill is completed, so you may begin to see some metrics in a few minutes."
+      ],
+      "metadata": {}
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# backfill for one month\n",
+        "backfill_start_date = datetime(2019, 9, 1)\n",
+        "backfill_end_date = datetime(2019, 10, 1)\n",
+        "backfill = monitor.backfill(backfill_start_date, backfill_end_date)\n",
+        "backfill"
+      ],
+      "outputs": [
+        {
+          "output_type": "execute_result",
+          "execution_count": 10,
+          "data": {
+            "text/plain": "Run(Experiment: weather-monitor-Monitor-Runs,\nId: weather-monitor-Monitor-Runs_1641336291992,\nType: DatasetDriftRunBackFill,\nStatus: Preparing)",
+            "text/html": "<table style=\"width:100%\"><tr><th>Experiment</th><th>Id</th><th>Type</th><th>Status</th><th>Details Page</th><th>Docs Page</th></tr><tr><td>weather-monitor-Monitor-Runs</td><td>weather-monitor-Monitor-Runs_1641336291992</td><td>DatasetDriftRunBackFill</td><td>Preparing</td><td><a href=\"https://ml.azure.com/runs/weather-monitor-Monitor-Runs_1641336291992?wsid=/subscriptions/03588139-a541-41f5-a712-e635916119b9/resourcegroups/mlwspc2022/workspaces/mlwspc2022&amp;tid=72f988bf-86f1-41af-91ab-2d7cd011db47\" target=\"_blank\" rel=\"noopener\">Link to Azure Machine Learning studio</a></td><td><a href=\"https://docs.microsoft.com/en-us/python/api/azureml-core/azureml.core.run.Run?view=azure-ml-py\" target=\"_blank\" rel=\"noopener\">Link to Documentation</a></td></tr></table>"
+          },
+          "metadata": {}
+        }
+      ],
+      "execution_count": 10,
+      "metadata": {
+        "gather": {
+          "logged": 1641336296187
+        }
+      }
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "## Query metrics and show results in Python\n",
+        "\n",
+        "The below cell will plot some key data drift metrics, and can be used to query the results. Run `help(monitor.get_output)` for specifics on the object returned."
+      ],
+      "metadata": {}
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# make sure the backfill has completed\n",
+        "backfill.wait_for_completion(wait_post_processing=True)"
+      ],
+      "outputs": [
+        {
+          "output_type": "execute_result",
+          "execution_count": 11,
+          "data": {
+            "text/plain": "{'runId': 'weather-monitor-Monitor-Runs_1641336291992',\n 'target': 'cpu-cluster',\n 'status': 'Completed',\n 'startTimeUtc': '2022-01-04T23:18:15.764491Z',\n 'endTimeUtc': '2022-01-04T23:27:39.055027Z',\n 'services': {},\n 'warnings': [{'message': 'This run might be using a new job runtime with improved performance and error reporting. The logs from your script are in user_logs/std_log.txt. Please let us know if you run into any issues, and if you would like to opt-out, please add the environment variable AZUREML_COMPUTE_USE_COMMON_RUNTIME to the environment variables section of the job and set its value to the string \"false\"'}],\n 'properties': {'_azureml.ComputeTargetType': 'amlcompute',\n  'ContentSnapshotId': '126034d3-7605-464b-b618-31da75de67ea',\n  'ProcessInfoFile': 'azureml-logs/process_info.json',\n  'ProcessStatusFile': 'azureml-logs/process_status.json'},\n 'inputDatasets': [{'dataset': {'id': '07fb36f3-29ce-4727-a9d1-a01200685087'}, 'consumptionDetails': {'type': 'Reference'}}, {'dataset': {'id': 'ad3e4ba8-c58d-46c6-936c-428503de7de8'}, 'consumptionDetails': {'type': 'Reference'}}],\n 'outputDatasets': [],\n 'runDefinition': {'script': '_generate_script_datasets.py',\n  'useAbsolutePath': False,\n  'arguments': ['--baseline_dataset_id',\n   '07fb36f3-29ce-4727-a9d1-a01200685087',\n   '--target_dataset_id',\n   'ad3e4ba8-c58d-46c6-936c-428503de7de8',\n   '--workspace_name',\n   'mlwspc2022',\n   '--workspace_location',\n   'westus2',\n   '--instrumentation_key',\n   '4a27a1bf-2684-46b7-95ae-8f73e9fde777',\n   '--ai_endpoint',\n   'https://dc.applicationinsights.azure.com/v2/track',\n   '--subscription_id',\n   '03588139-a541-41f5-a712-e635916119b9',\n   '--enable_metric_logger',\n   'true',\n   '--run_type',\n   'BackFill',\n   '--drift_threshold',\n   '0',\n   '--datadrift_id',\n   '8069a537-4a2a-4d3b-aef7-e38c1a3cb6fe',\n   '--datadrift_run_id',\n   '5588875f-9728-4ab1-9c0e-92dacef3568b',\n   '--datadrift_name',\n   'weather-monitor',\n   '--frequency',\n   'Week',\n   '--datadrift_configuration_type',\n   'DatasetBased',\n   '--start_date',\n   '2019-09-01',\n   '--end_date',\n   '2019-10-06',\n   '--features_whitelist',\n   'usaf',\n   'wban',\n   'datetime',\n   'latitude',\n   'longitude',\n   'elevation',\n   'windAngle',\n   'windSpeed',\n   'temperature',\n   'seaLvlPressure',\n   'cloudCoverage',\n   'presentWeatherIndicator',\n   'pastWeatherIndicator',\n   'precipTime',\n   'precipDepth',\n   'snowDepth',\n   'stationName',\n   'countryOrRegion',\n   'p_k'],\n  'sourceDirectoryDataStore': None,\n  'framework': 'Python',\n  'communicator': 'None',\n  'target': 'cpu-cluster',\n  'dataReferences': {},\n  'data': {},\n  'outputData': {},\n  'datacaches': [],\n  'jobName': None,\n  'maxRunDurationSeconds': None,\n  'nodeCount': 1,\n  'instanceTypes': [],\n  'priority': None,\n  'credentialPassthrough': False,\n  'identity': None,\n  'environment': {'name': 'Experiment weather-monitor-Monitor-Runs Environment',\n   'version': 'Autosave_2022-01-04T22:44:52Z_20659079',\n   'python': {'interpreterPath': 'python',\n    'userManagedDependencies': False,\n    'condaDependencies': {'dependencies': ['python=3.6.2',\n      'scikit-learn',\n      'scipy>=1.0.0',\n      'numpy',\n      'lightgbm<=3.1.0',\n      'pandas',\n      'pyarrow>=0.11.0',\n      'jsonpickle',\n      'psutil',\n      {'pip': ['azureml-defaults==1.36.0', 'azureml-datadrift==1.36.0']}],\n     'name': 'azureml_aa3c7abc582cf992c2eddca2102ef6a3'},\n    'baseCondaEnvironment': None},\n   'environmentVariables': {},\n   'docker': {'baseImage': 'mcr.microsoft.com/azureml/openmpi4.1.0-ubuntu20.04',\n    'platform': {'os': 'Linux', 'architecture': 'amd64'},\n    'baseDockerfile': None,\n    'baseImageRegistry': {'address': None,\n     'username': None,\n     'password': None}},\n   'spark': {'repositories': [], 'packages': [], 'precachePackages': True},\n   'inferencingStackVersion': None},\n  'history': {'outputCollection': True,\n   'directoriesToWatch': None,\n   'enableMLflowTracking': False},\n  'spark': {'configuration': {}},\n  'parallelTask': {'maxRetriesPerWorker': 0,\n   'workerCountPerNode': 1,\n   'terminalExitCodes': None,\n   'configuration': {}},\n  'amlCompute': {'name': None,\n   'vmSize': None,\n   'retainCluster': False,\n   'clusterMaxNodeCount': 1},\n  'aiSuperComputer': {'instanceType': 'D2',\n   'imageVersion': 'pytorch-1.7.0',\n   'location': None,\n   'aiSuperComputerStorageData': None,\n   'interactive': False,\n   'scalePolicy': None,\n   'virtualClusterArmId': None,\n   'tensorboardLogDirectory': None,\n   'sshPublicKey': None,\n   'sshPublicKeys': None,\n   'enableAzmlInt': True,\n   'priority': 'Medium',\n   'slaTier': 'Standard',\n   'userAlias': None},\n  'kubernetesCompute': {'instanceType': None},\n  'tensorflow': {'workerCount': 0, 'parameterServerCount': 0},\n  'mpi': {'processCountPerNode': 0},\n  'pyTorch': {'communicationBackend': None, 'processCount': None},\n  'hdi': {'yarnDeployMode': 'None'},\n  'containerInstance': {'region': None, 'cpuCores': 2.0, 'memoryGb': 3.5},\n  'exposedPorts': None,\n  'docker': {'useDocker': True,\n   'sharedVolumes': True,\n   'shmSize': '2g',\n   'arguments': []},\n  'cmk8sCompute': {'configuration': {}},\n  'commandReturnCodeConfig': {'returnCode': 'Zero',\n   'successfulReturnCodes': []},\n  'environmentVariables': {},\n  'applicationEndpoints': {},\n  'parameters': []},\n 'logFiles': {'azureml-logs/20_image_build_log.txt': 'https://mlwspc20228946559965.blob.core.windows.net/azureml/ExperimentRun/dcid.weather-monitor-Monitor-Runs_1641336291992/azureml-logs/20_image_build_log.txt?sv=2019-07-07&sr=b&sig=OUJEkkXHwwIBLnokoNyZr%2Fd5VC%2FqCxoWY9nbMMoANNA%3D&skoid=099f75b8-11fe-4079-b40a-22b95303d432&sktid=72f988bf-86f1-41af-91ab-2d7cd011db47&skt=2022-01-04T22%3A34%3A54Z&ske=2022-01-06T06%3A44%3A54Z&sks=b&skv=2019-07-07&st=2022-01-04T23%3A17%3A50Z&se=2022-01-05T07%3A27%3A50Z&sp=r'},\n 'submittedBy': 'Faraz Rasheed'}"
+          },
+          "metadata": {}
+        }
+      ],
+      "execution_count": 11,
+      "metadata": {
+        "gather": {
+          "logged": 1641338870840
+        }
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# get results from Python SDK (wait for backfills or monitor runs to finish)\n",
+        "results, metrics = monitor.get_output(start_time=datetime(year=2019, month=9, day=1))"
+      ],
+      "outputs": [],
+      "execution_count": 12,
+      "metadata": {
+        "gather": {
+          "logged": 1641338890713
+        }
+      }
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# plot the results from Python SDK \n",
+        "monitor.show(backfill_start_date, backfill_end_date)"
+      ],
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stderr",
+          "text": "/anaconda/envs/azureml_py36/lib/python3.6/site-packages/pandas/plotting/_matplotlib/converter.py:103: FutureWarning: Using an implicitly registered datetime converter for a matplotlib plotting method. The converter was registered by pandas on import. Future versions of pandas will require you to explicitly register matplotlib converters.\n\nTo register the converters:\n\t>>> from pandas.plotting import register_matplotlib_converters\n\t>>> register_matplotlib_converters()\n  warnings.warn(msg, FutureWarning)\n"
+        },
+        {
+          "output_type": "execute_result",
+          "execution_count": 13,
+          "data": {
+            "text/plain": "{'weather-monitor': <Figure size 1440x576 with 2 Axes>}"
+          },
+          "metadata": {}
+        },
+        {
+          "output_type": "display_data",
+          "data": {
+            "text/plain": "<Figure size 1440x576 with 2 Axes>",
+            "image/png": "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AAAAAPXPPw5OZt4tSUvqphwA6i/nXH52dvaaVJcDycvOzi5xznVItJ7gJAAAABq9pAMjEsGReobgFpA6/A3FvmLmJ+9xO1yNpgu3JlbtqclHjRrV6a677lreokWLhA/4oEGDCiZNmrS4VatWFcOGDTuwrKzMJk2aVK2ne/78+Vnjxo1rP3HixKXVLVNDFdy3hDMvEZwEAAAAAABopAguS5deemnncePGLRsxYkTnPn36bG7SpImbNGlS+zvuuGPFoEGDunTr1q1k2bJlWeedd96GAQMGbP7pT39aUFBQsPM///lPM0navn27rV+/PiMtLc1t2rQpLScnp+LQQw89sqioaO2cOXOyn3nmmUVvvfVW80ceeaRd9+7dSz7++ONmDz744FJJKi0t1ciRIw/YsWNHWnl5uR5//PElGRmNK1zHbN0AAAAAAABotE4++eQtr7zySsucnJzy4uLi7BkzZrTo1avX5tj6a665Zs348eOXTpkyJe/FF1/MOe200zaNHz9+WZs2bcok6cknn8w966yzNg4cOHDDn/70pzxJys/PL73jjjtWHn/88VtnzpyZ/fDDD7d75plnFl133XWrw8d+4YUXchYvXtwkNze3fOvWrekLFy7M2rdnn3qNKxQLAAAAAAAAhAwYMGDzpZde2qVfv36bvvjiiybr16/PyM3NLY+tz8nJqcjMzHQ7duww55yysrKcJGVlZVVI0rPPPtumbdu2pWampUuXZl177bVrs7OzyyUpMzPTlZSUpEm+e3Osa3pMRUWFnXDCCVtuu+22VfvshOsZgpMAAAAAAABotDp16lS2cOHCJqeffvrmkpISq6io0Pr16yNjZueee+6myy+//KDVq1dnLF26tMnnn3+e1bFjx51PPfXUYkm64oorDpw9e3bT+O2uuuqq1UVFRV26dOmys3nz5hWx9EGDBm382c9+1mX48OEHbty4MX3SpEmLs7Oza9DXvuEy5xrV+daawsJCN2vWrFQXAwAA1BEzm+2cK0x1ObBLXda/3uuc/Da997Pxthq6ZO8h969+4f41bPwNbdjq2/1LVAcrLi5e1KNHjwY7W/enn36aNWHChLarVq3KvOyyy9acccYZW1Ndpn2puLi4bY8ePQqi1tFyEgAAAAAAAKhDRx555M6HHnrom1SXoz5iQhwAAAAAAAAAKUFwEgAAAAAAAEBKEJwE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MZL+KmmUpHFm9oCZTQmCldE7NBtmZrPMbNbq1auTKAoAAAAAAAAakoqKir3ex6BBgwo2btyYNm/evCZDhw7tLElXX331AbfddlsHSTr//PMLVq9eHTWM4W4GDBhwiCTNnz8/a9iwYQdW59jl5eUaPXp0pw8++KBpZflieUaNGtVpy5YtUfG0yPxVHbu66sNs3SvNrKNzbrmZdZS0KkhfKik8LOuBkqJaN+7N9lfJdwU/QdJOST+V9G9Jf4sqqHNuoqSJkh+QvZrnBwAAAAAAgFpiZS/3rMl2LmPA7Kj0hx56qM306dNbHnHEESXp6enu6aefbnvBBResPfvsszc++uijbZ1zatmyZflNN9206vLLLz/ooIMO2jlw4MANXbt23XnPPfd0cM6pa9euO376059uuOiiiw4+66yzNnz66afNHn300cWffPJJ9q233trxkksuWbto0aIsSSopKUlbtWpVpiRt3Lgxff369enXX399p9h+rrvuujW33npr/oYNGzJ69Oix7ZRTTtmyYMGCZqNHj+5UVFS07sMPP2x+5ZVXHrhs2bLMl156aeFLL72UM3Xq1FYlJSVp559//vqlS5dmTps2Ladnz55bY+c4evToTps3b07LyMhwhx9+eMm11167dvDgwV3atWtX9v777zcvKipat2TJkqzy8nJ7/vnnWz777LOtW7VqVXb77bevmDp1as7cuXOzN2/enD558uTFM2fObLFq1aqMiy++eN1HH33U9KOPPsrevHlz+oQJExbff//9HdatW5d+zDHHbLv22mvXVue+1IeWk3+TdEnw8yXyM2nH0gebWRMzO1hSd0nv19b2ZpYnP3P4nyVlS6qQb5lZaeQXAAAAAAAA+5fTTjtt0913371izpw5zdu3b7/znnvuWTFjxowWJSUlaXl5eeULFy5ssmXLlrT09HQ3aNCg9f3799/y+9//vl2zZs0q2rRpUz5v3rxmknTYYYdtv/POO1fm5eWVbdq0Kf2oo47advfddy/v1atXSevWrcvnzZvXJC8vrywjI8PNnj276SGHHLIjfj9m5srKyqx169Zlzz//fF6vXr1Kunfvvv2BBx74Jicnp6Jr164lEyZMWNquXbuyJUuWZI4fP759bm5ueX5+funMmTObS9KAAQM2jhkzZlX4HIuKitb/8Y9/XPbaa6/lvP/++806duxYOn78+GXdunUrCed75JFH2j333HOLHnvssaWdO3cuk6SMjAy3fPnyzHfffbfZ8ccfv+Xaa69d1b9//y2vvvpqqyeffHLxFVdcsXrSpEmtJenCCy9cV93ApLSPW06a2TOS+khqa2ZLJd0u6beS/mJmQyUtlvQTSXLOfWJmf5H0qaQySVc758qD/TwmaYJzblZNtg+MkXSXc86Z2b8kXS3pY0kT6vIaAAAAAAAAoH4pKyszSSotLbWWLVtWSL5b9w9/+MMNF1100cZYvkceeWTJU089lfvyyy/nVFRU2GWXXba2d+/e2yXf5bp58+YVkpSZmelKSkosLW1Xu8BTTjll869//euOQ4cOXbt69eqMu+66K3/w4MHrX3/99Zbh/UyePDn3yCOPLLnmmmvW9u7d+1BJMtvV2zonJ6dckpo2bVpRUlJiFRUVuu+++77JzMyU5FuC5ubm7tGvumXLluWS5Jwz55yysrIqJKlJkya79Q4OH0uSpkyZ0vr111//4pe//GXHrVu3pqelpbn4vOHzzMvLq36fbu3j4KRzrijBqn4J8t8t6e6I9MtDP69Ndvtg3XWhn0sknZGw4AAAAAAAANhvvfrqqzkfffRRs8LCwq2zZ8/OlqRhw4atGzp06EEzZsxouXPnThsxYsSaCRMmtC0pKbHTTz9984knnrj1V7/61QH5+fmlLVu2LB82bNgerQWPP/74LVdfffWBv/jFL1afeeaZm2688caDnnrqqa83bNiQPmLEiIMnTZq0+Jhjjtke3s/QoUPX/upXvzpw+fLlmeXl5SZJ7dq1K7vqqqsOuPTSS/c4xi9+8YtVgwcPLsjLyysrLCzcVp3z7d279/YJEya0vfPOO9vPmzcvO7xu6NChqy+88MIurVu3Lrv11ltX5ufnl952220dZs+e3bxv375bjjvuuK333ntv/tChQ9f07dt305AhQzpv2LAh449//OOS3/3ud+0THTMRc46hE2uisLDQzZo1K9XFAAAAdcTMZjvnClNdDuxSl/Wv9zpXnSde7yW1Xw7UXLL3kPtXv3D/Gjb+hjZs9e3+JaqDFRcXL+rRo8eaujjmQw891KZdu3ZlRUVFG6vOjZooLi5u26NHj4KodfVhQhwAAAAAAACkQO9JrWqw1f4Vwxs5cmS1x0dE7asPE+IAAAAAAAAAaIQITgIAAAAAAABICYKTAAAAAAAAAFKCMScBAAAAACn159csqfy9xcSuQGO25e/betZkuxY/yp69t8eeP39+1rhx49pPnDhx6XnnnVfwxz/+cUlGRoYOO+yw7yxfvrz4q6++yvrd737X/rHHHlta2X7Ck/AMGjSoYNKkSYtbtWpVUdXxy8vL9cMf/vCQl19++avK8g0YMOCQCRMmLHniiSfybr/99lVV7XfAgAFV7rOiokJpabXfzpHgJAAAAAAgpf5ncU5yGxxWN+UA0Dg99NBDbaZPn97yiCOOKElPT3fbt29PW7NmTUZ+fn7pvffeu6KoqKhLy5Yty4866qjtmZmZ7oMPPmhxzz33tDvllFM2v/LKKy3T0tLcWWedtf7NN99sPm/evKannnrq5vvuu6/d559/3nTDhg3p999//7IPPvgge/r06S1Xr16d8fDDDy955513Wmzbtu3bSN+YMWPyFyxY0PTyyy9fc/bZZ28aOXLkATt27EgrLy/X448/vuS44447fMCAARtOP/30TbFtDj300COLiorWzpkzJ/uZZ55Z9NZbbzWfMGFCu27dupVI0o4dO2zZsmVZpaWl+vnPf96lRYsW5d/97ne3n3POOZvGjRvXfu3atelnnnnmpvbt25ctWLCg2Q033NBx9OjRq6688sqDWrZsWX700Udvu/7669d069btqAsuuGDt4MGD1x999NE7avv6060bAAAAAAAAjdppp5226e67714xa9as5hUVFcrJySmfOnVqniRt2LAh/dRTT918xRVXrOvXr9+WXr16bbnllltWn3nmmZvfeOONlu+8806L22+/ffm0adNavvXWWy379++/5ZlnnmnTqlWr8tzc3PKZM2dmZ2RkuIqKCpWWltrUqVNzTjzxxC0XXnjhuqKioo2SNGrUqNV//vOfv54yZUreCy+8kLN48eImubm55Vu3bk1fuHBhVtOmTcvvueeeFX379t0WK3N+fn7pHXfcsfL444/fOnPmzOyHH3643TPPPLNo1KhRq8Pn9n//93+tCgsLtz766KNLR44cuTYzM9Pt2LHDOnToUPb000+37t+//5bu3btvv//++5dPmjSp9dChQ9c8+eSTi19//fUcSWrfvv3Oe+65Z0VdBCYlWk4CAAAAAACgkSsrKzNJWrt2bYYkPfjgg9/07t27hST99a9/XfiPf/wj54ILLjj497///bfdtQ877LCdixcvzurcufPOrl27lq5cuTJz06ZN6WlpaS4/P3/nAw888E0sb79+/bpOmzbty/Hjx7fZtm1bWnz36NatW5fHgoYVFRV2wgknbLntttu+7Y6dk5NTHl/m7OzscknKzMx0JSUlaWamzMxM16xZs93GvnDO7dYde+LEiW3OPffcDX369Nl6xhlndJMkM4vltdjPlR27NhGcBAAAAAAAQKP26quv5nz00UfNTjrppM3z5s3LHjNmTId169Zl7tixw6688srOzZo1q+jWrVtJ586dS7/66qsmY8eO7TB27NiVbdu2LWvTpk1ZbD/du3cvycvLqygsLNx6ySWXdHbO2bBhw9YcfvjhJTfeeGP+f/7zn2b9+vXb1LNnz22/+c1vOsaComGDBg3a+LOf/azL8OHDD9y4cWP6pEmTFlfnHEaMGLF6xIgRB+bn55eG088999xNQ4YMOWjEiBFNPPgeTwAAIABJREFUjj766O0nn3zylocffrjdjBkzWmRmZjpJysjIcNdee22nm266adWIESM6T5kyJfcHP/jB5r29rtVhzjGQcE0UFha6WbNmpboYAACgjpjZbOdcYarLgV3qsv71Xufkt+m9pPbLgZpL9h5y/+qZV1sll//0jXVTDtQIf0MbuGTff1KdvgcT1cGKi4sX9ejRY01dHDM8OU1d7B9ScXFx2x49ehREraPlJAAAAAAAABqtkSNHrk11GRozJsQBAAAAAAAAkBK0nAQAAAAAADXWe1INugWL3rMAPFpOAgAAAAAAANV03nnnFYwYMeKAVJdjf0HLSQAAAAAAADQcp1nPGm33mpsdlRyeEOeMM87o2qRJk4pOnTqVnnzyyVtOOumkrePGjWu/du3a9DPPPHNT+/bty4qLi5tfccUVq/bqHPAtWk4CAID/z96dR1dV3/v/f70TMpIEAiSEGRHU4hCBCFoVQVBwKlVaNSAXFQRRBIE6UYeihWor9AvWgaEo17nibW25VqVO1PEKSPCHlaFoIRAgJJD5JDk5n98f5yQGPAFOSMj0fKzFytmfvd/7vHe2i/XxzWcAAAAAICkiIsJ5PJ6wK664Iu+66647GBER4UpLS61jx47el156qd2IESMK+/TpU3LvvfdmN3SuzQUjJwEAANDisV4aAAAtV1RUlPN6vSZJJSUlYa+99tq3b7zxRsL48eO79+nTp/Tqq68+OGTIkKJL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AAAAAEmTJk06IOlAQ+fRkrAhDgAAAAAAAIAGQXESAAAAAAAAQINgWjcAAAAAAACajM+7aUBt4gbtrPtdviVp1apV8Rs3boyePXt2dmVbRUWFwsPDD7kuOzs7fNq0aV1jYmJ8eXl54XPmzMk644wzSivP/+1vf4t/+OGHO5900kmehISEimXLlmUe7bvXrFkTu3nz5qhbbrmlyU5FpzgJAAAAAACAFmvLli2Rd999d5ekpKTyn/3sZwcXL17cwTmnqVOnZpeUlIRVFh6vvPLKXqtWrdo+dOjQ3hdeeGHBpk2bYu6+++69a9asifv8889bt23btmLbtm3Rubm54f369StevXp1m1WrVm3/6KOPYt98882E3NzcVnfdddfe/v37e3JycsJvvPHG7o8//viu9PT0XiNHjjzYu3fv0quvvjq38rsk6bHHHkvasmVL9MGDB8N/+9vf7nrvvffi3nvvvYTWrVtXhIWF6Sc/+UlednZ2qz179oTfeuut3ePj4yvOOuus4rvuumv/Kaec0jc9PT1n/fr1sS+//PJ3cXFxrqF/18EwrRsAAAAAAAAt1oIFC5IfeeSR3UuXLs188smFsYwaAAAgAElEQVQnk1544YX/vPjii/954oknkmuKeeihh/bec889e//yl7+0GTx4cOGIESPybrvttlxJGjNmTO706dNzhg8fnveXv/wl/plnnulwxx137N+xY0dk//79PZLUvn37Cq/Xa5J0yimnlMybN29PcnKy94033ki88MIL+/Tt27ckLy8v7OWXX27fpk2birZt21Z89tlnsStXrmz38ssv/2fcuHG51fNZvnx5uwkTJux//vnnd7z33nsJkpSSklI+Z86cveeee27RZ599Flt/v8HjQ3ESAAAAAAAALZZzTmFhYVWfzUxmJkmKjo72VRYRi4uLwyQpKirKFx4eroiICFdaWhoWHh5+yIjExMTECkmaPHly7pIlS5LMTJ06dfJ27dq1LCMjI0qScnNzw1q1auUkKSEhoaIydtSoUQfef//9rZs3b472er2WkpJStmDBgt1//OMfd44dOzav8rrK/Ko9gx3eFhsbWyFJERERzuPxNNoaINO6AQAAAAAA0GLNmDFj3+zZszunpKSUT5s2bd+4ceN6SNLtt9++b9CgQSULFy5MnjNnTnJmZmZksPjTTz/dM3/+/I6tW7f2VW+PiYlxbdu29d56663ZkvTII49kTZs2rWvr1q19eXl54XPnzt0d7H6tWrXSddddl/vMM8+0T0tLKxo/fnw355xNmjRp/89+9rPcMWPG9IiMjPS1a9euqqh58803506ZMqXbypUr21500UUFdffbqX/mXKOcbt7opaWlubVr1zZ0GgAAoJ6Y2TrnXFpD54Hv1Wv/a3Wb0GMuyTv6NThxQn2HvL/GhffXtPF3aNPWyN5fTX2wjIyM71JTU/fX2xfXgyeeeKL9F1980fq///u/d9TVPT/66KPYV199NTErKyviwQcfzDrrrLNKjx7V8DIyMjqkpqb2DHaOkZMAAAAAAABAHbvjjjtyJOXU5T0vuOCC4gsuuKC4Lu/Z0BrtfHMAAAAAAAAAzRvFSQAAAAAAAAANgmndAAAAAAAAaDq+swG1iuvp1h3tks2bN0fOnz8/ecmSJZmh3n7mzJmd09PTc8855xzP5MmTuy5evDjke7REFCcBAAAAAADQYm3ZsiVy3rx5HZ1zOvnkk0slqby8XNOmTetSWloaVlFRoV/+8pd758+fn7x48eLMRx99NOn000/37Ny5M2LDhg2xBQUF4c8999yOzz77LG7fvn2txo0bl/uf//wnUpJ+97vfddi4cWNsQUFB+DPPPLPjt7/9bceCgoKwVq1audNOO80zffr0Ol2TsiliWjcAAAAAAABarN///vdJMTExvvbt21f8/e9/bytJf/7znxN27NgR1bZt24qioqJwM1NmZmZkRUWFPv7447jLL7+8QJJatWrlsrKyIj755JOYc889t3D69On7RowYUVh579WrV7d5/vnnd9xyyy3Zy5cvbydJ6enpB55++uld//jHPxIa5okbF0ZOAgAAAAAAoMXy+Xx288035wwaNKikclq3z+ez8847r/D+++/fV3ndkCFD8hcuXNihe/fuZeHh4Vq5cmW79957b9usWbM6FRUVhYeFhbnD721mkqSwsO/HB8bHx1dIknPO6v/pGj+KkwAAAAAAAGixZs2ate8Xv/hFl5SUlPLKwuHo0aPzbrjhhh6TJ0/umpeXF758+fIdN95444E+ffqc+c4772yWpJSUlPL777+/47p161oPHTq0cODAgUW/+c1vUiZMmLC/8t5Dhw7Nv/HGG7sdPHiw1dNPP73zd7/7XXJDPWdjZc79oKiLY5CWlubWrl3b0GkA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\n"
+          },
+          "metadata": {
+            "needs_background": "light"
+          }
+        }
+      ],
+      "execution_count": 13,
+      "metadata": {
+        "gather": {
+          "logged": 1641338896001
+        }
+      }
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "## Enable the monitor's pipeline schedule\n",
+        "\n",
+        "Turn on a scheduled pipeline which will anlayze the target dataset for drift every `frequency`. Use the latency parameter to adjust the start time of the pipeline. For instance, if it takes 24 hours for my data processing pipelines for data to arrive in the target dataset, set latency to 24. "
+      ],
+      "metadata": {}
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# enable the pipeline schedule and recieve email alerts\n",
+        "monitor.enable_schedule()\n",
+        "\n",
+        "# disable the pipeline schedule \n",
+        "#monitor.disable_schedule()"
+      ],
+      "outputs": [
+        {
+          "output_type": "stream",
+          "name": "stdout",
+          "text": "Current state: Enabling\n....State transitioning completed, status: Enabled\n"
+        }
+      ],
+      "execution_count": 14,
+      "metadata": {
+        "gather": {
+          "logged": 1641339073073
+        }
+      }
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "## Delete compute target\n",
+        "\n",
+        "Do not delete the compute target if you intend to keep using it for the data drift monitor scheduled runs or otherwise. If the minimum nodes are set to 0, it will scale down soon after jobs are completed, and scale up the next time the cluster is needed."
+      ],
+      "metadata": {}
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "# optionally delete the compute target\n",
+        "#compute_target.delete()"
+      ],
+      "outputs": [],
+      "execution_count": null,
+      "metadata": {}
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "## Delete the DataDriftDetector\n",
+        "\n",
+        "Invoking the `delete()` method on the object deletes the the drift monitor permanently and cannot be undone. You will no longer be able to find it in the UI and the `list()` or `get()` methods. The object on which delete() was called will have its state set to deleted and name suffixed with deleted. The baseline and target datasets and model data that was collected, if any, are not deleted. The compute is not deleted. The DataDrift schedule pipeline is disabled and archived."
+      ],
+      "metadata": {}
+    },
+    {
+      "cell_type": "code",
+      "source": [
+        "monitor.delete()"
+      ],
+      "outputs": [],
+      "execution_count": null,
+      "metadata": {}
+    },
+    {
+      "cell_type": "markdown",
+      "source": [
+        "## Next steps\n",
+        "\n",
+        "  * See [our documentation](https://aka.ms/datadrift) or [Python SDK reference](https://docs.microsoft.com/python/api/overview/azure/ml/intro)\n",
+        "  * [Send requests or feedback](mailto:driftfeedback@microsoft.com) on data drift directly to the team\n",
+        "  * Please open issues with data drift here on GitHub or on StackOverflow if others are likely to run into the same issue"
+      ],
+      "metadata": {}
+    }
+  ],
+  "metadata": {
+    "index_order": 1,
+    "exclude_from_index": false,
+    "task": "Filtering",
+    "deployment": [
+      "None"
+    ],
+    "authors": [
+      {
+        "name": "jamgan"
+      }
+    ],
+    "star_tag": [
+      "featured"
+    ],
+    "microsoft": {
+      "host": {
+        "AzureML": {
+          "notebookHasBeenCompleted": true
+        }
+      }
+    },
+    "kernel_info": {
+      "name": "python3-azureml"
+    },
+    "language_info": {
+      "name": "python",
+      "version": "3.6.9",
+      "mimetype": "text/x-python",
+      "codemirror_mode": {
+        "name": "ipython",
+        "version": 3
+      },
+      "pygments_lexer": "ipython3",
+      "nbconvert_exporter": "python",
+      "file_extension": ".py"
+    },
+    "compute": [
+      "Remote"
+    ],
+    "kernelspec": {
+      "name": "python3-azureml",
+      "language": "python",
+      "display_name": "Python 3.6 - AzureML"
+    },
+    "tags": [
+      "Dataset",
+      "Timeseries",
+      "Drift"
+    ],
+    "datasets": [
+      "NOAA"
+    ],
+    "category": "tutorial",
+    "framework": [
+      "Azure ML"
+    ],
+    "friendly_name": "Data drift quickdemo",
+    "nteract": {
+      "version": "nteract-front-end@1.0.0"
+    }
+  },
+  "nbformat": 4,
+  "nbformat_minor": 0
+}
